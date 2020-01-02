@@ -23,6 +23,12 @@ yq -s -c . foo.yaml
 This is a limitation of the golang flag stdlib, this will probably be replaced
 in the future.
 
+## What is different?
+
+- This rejects invalid YAML documents rather that trying a best effort parsing
+and failing.
+- This always render YAML as raw regardless of the command line flag passed,
+it probably will support colored output in the future.
 
 ## FAQ
 

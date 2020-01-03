@@ -288,7 +288,7 @@ func (yq *yq) run() error {
 		}
 	} else {
 		for _, file := range yq.files {
-			file, _ := os.Open(file)
+			file, err := os.Open(file)
 			if err != nil {
 				yq.jqStdin.Close()
 				return err

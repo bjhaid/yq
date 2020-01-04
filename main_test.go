@@ -7,18 +7,33 @@ import (
 	"testing"
 )
 
+type buffer struct {
+	bytes.Buffer
+}
+
+func (b *buffer) Close() error {
+	return nil
+}
+
 func TestTransformToJSON(t *testing.T) {
+
 	type testCase struct {
 		testDescription string
-		actual          string
-		expected        []string
+		yaml            string
+		expected        string
 		shouldError     bool
 	}
 	testcases := []testCase{
 		{
 			"Valid YAML single document",
 			`foo: bar`,
-			[]string{`{"foo":"bar"}`},
+			`{"foo":"bar"}`,
+			false,
+		},
+		{
+			"No HTML escaping",
+			`foo: <bar>`,
+			`{"foo":"<bar>"}`,
 			false,
 		},
 		{
@@ -27,7 +42,8 @@ func TestTransformToJSON(t *testing.T) {
 foo: bar
 ---
 bar: baz`,
-			[]string{`{"foo":"bar"}`, `{"bar":"baz"}`},
+			`{"foo":"bar"}
+{"bar":"baz"}`,
 			false,
 		},
 		{
@@ -38,7 +54,8 @@ foo: bar
 ---
 bar: baz
 ---`,
-			[]string{`{"foo":"bar"}`, `{"bar":"baz"}`},
+			`{"foo":"bar"}
+{"bar":"baz"}`,
 			false,
 		},
 		{
@@ -47,7 +64,7 @@ bar: baz
 foo: bar
 	baz: boo
 `,
-			[]string{},
+			"",
 			true,
 		},
 		{
@@ -56,7 +73,7 @@ foo: bar
 foo: bar
 foo: boo
 `,
-			[]string{},
+			"",
 			true,
 		},
 		{
@@ -67,26 +84,26 @@ baz:
   - boo
   bob: alice
 `,
-			[]string{},
+			"",
 			true,
 		},
 	}
 	for _, tCase := range testcases {
-		var arr []string
 		t.Run(tCase.testDescription, func(t *testing.T) {
+			var b buffer
 			err := transformToJSON(
-				bytes.NewReader([]byte(tCase.actual)),
-				func(b []byte) error {
-					arr = append(arr, string(b))
-					return nil
-				})
+				bytes.NewReader([]byte(tCase.yaml)),
+				&b,
+			)
+
+			actual := strings.Trim(b.String(), "\r\n")
 
 			if !tCase.shouldError && err != nil {
 				t.Errorf("Got: %s, running transformToJSON", err)
 			}
 
-			if !tCase.shouldError && !reflect.DeepEqual(tCase.expected, arr) {
-				t.Errorf("Expected %v got %v", tCase.expected, arr)
+			if !tCase.shouldError && !reflect.DeepEqual(tCase.expected, actual) {
+				t.Errorf("Expected '%v' got '%v'", tCase.expected, actual)
 			}
 
 			if tCase.shouldError && err == nil {

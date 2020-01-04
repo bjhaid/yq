@@ -32,11 +32,11 @@ type jqFlags struct {
 }
 
 type yq struct {
-	returnYAML bool
-	jqCmd      exec.Cmd
-	jqStdin    io.WriteCloser
-	jqStdout   io.ReadCloser
-	files      []string
+	returnYAML    bool
+	jqCmd         exec.Cmd
+	jqStdout      io.ReadCloser
+	jqStdinWriter io.WriteCloser
+	files         []string
 
 	jqFlags
 }
@@ -61,9 +61,10 @@ func transformToYAML(reader io.Reader, writer io.Writer) error {
 	return err
 }
 
-func transformToJSON(reader io.Reader, fn func(byteArray []byte) error) error {
+func transformToJSON(reader io.Reader, writer io.WriteCloser) error {
 	dec := yaml.NewDecoder(reader)
-	var b []byte
+	enc := json.NewEncoder(writer)
+	enc.SetEscapeHTML(false)
 	var err error
 	for {
 		var m interface{}
@@ -71,19 +72,18 @@ func transformToJSON(reader io.Reader, fn func(byteArray []byte) error) error {
 			if err == io.EOF {
 				break
 			}
-			return err
+			if err != nil {
+				return err
+			}
 		}
 		if m == nil {
 			continue
 		}
-		if b, err = json.Marshal(m); err != nil {
-			return err
-		}
-		if err := fn(b); err != nil {
+		if err = enc.Encode(m); err != nil {
 			return err
 		}
 	}
-	return nil
+	return err
 }
 
 func (yq *yq) parseFlags() error {
@@ -241,12 +241,9 @@ func (yq *yq) compileJqCmd() error {
 		yq.files = append(yq.files, arg)
 	}
 
-	var stdinPipe io.WriteCloser
-	stdinPipe, err := yq.jqCmd.StdinPipe()
-	if err != nil {
-		return err
-	}
-	yq.jqStdin = stdinPipe
+	reader, writer := io.Pipe()
+	yq.jqStdinWriter = writer
+	yq.jqCmd.Stdin = reader
 
 	if yq.returnYAML {
 		var stdoutPipe io.ReadCloser
@@ -268,53 +265,35 @@ func (yq *yq) compileJqCmd() error {
 func (yq *yq) run() error {
 	var err error
 	if err = yq.jqCmd.Start(); err != nil {
-		yq.jqStdin.Close()
 		return err
 	}
 
 	if len(yq.files) == 0 {
-		err = transformToJSON(os.Stdin, func(b []byte) error {
-			_, err = yq.jqStdin.Write(b)
-			if err != nil {
-				yq.jqStdin.Close()
-			}
-			return err
-
-		})
+		err = transformToJSON(os.Stdin, yq.jqStdinWriter)
 
 		if err != nil {
-			yq.jqStdin.Close()
+			yq.jqStdinWriter.Close()
 			return err
 		}
 	} else {
 		for _, file := range yq.files {
 			file, err := os.Open(file)
 			if err != nil {
-				yq.jqStdin.Close()
+				yq.jqStdinWriter.Close()
 				return err
 			}
 
-			err = transformToJSON(file, func(b []byte) error {
-				_, err = yq.jqStdin.Write(b)
-				_, err = yq.jqStdin.Write([]byte("\r\n"))
-				if err != nil {
-					yq.jqStdin.Close()
-				}
-				return err
-			})
-
-			if err != nil {
-				yq.jqStdin.Close()
+			if err = transformToJSON(file, yq.jqStdinWriter); err != nil {
+				yq.jqStdinWriter.Close()
 				return err
 			}
 		}
 	}
-
-	yq.jqStdin.Close()
+	yq.jqStdinWriter.Close()
 
 	if yq.returnYAML {
-		err := transformToYAML(yq.jqStdout, os.Stdout)
-		if err != nil {
+		if err := transformToYAML(yq.jqStdout, os.Stdout); err != nil {
+			yq.jqStdinWriter.Close()
 			return err
 		}
 	}
@@ -325,7 +304,7 @@ func (yq *yq) run() error {
 }
 
 func main() {
-	y := yq{}
+	var y yq
 
 	if path, err := exec.LookPath("jq"); err != nil {
 		fmt.Fprint(os.Stderr, err)
@@ -346,5 +325,6 @@ func main() {
 
 	if err := y.run(); err != nil {
 		fmt.Println(err)
+		os.Exit(1)
 	}
 }

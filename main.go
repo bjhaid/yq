@@ -24,11 +24,8 @@ type jqFlags struct {
 	sort                        bool
 	tab                         bool
 	arg                         string
-	argjson                     string
 	slurpfile                   string
 	rawfile                     string
-	args                        string
-	jsonargs                    string
 }
 
 type yq struct {
@@ -86,52 +83,73 @@ func transformToJSON(reader io.Reader, writer io.WriteCloser) error {
 	return err
 }
 
-func (yq *yq) parseFlags() error {
-	flag.BoolVar(&(yq.returnYAML), "y", false, "Transcode jq JSON output back "+
+func (yq *yq) parseFlags(f *flag.FlagSet, osArgs []string) error {
+	f.BoolVar(&(yq.returnYAML), "y", false, "Transcode jq JSON output back "+
 		"into YAML and emit it")
-	flag.BoolVar(&(yq.returnYAML), "yaml-output", false, "Transcode jq JSON output back "+
+	f.BoolVar(&(yq.returnYAML), "yaml-output", false, "Transcode jq JSON output back "+
 		"into YAML and emit it")
-	flag.BoolVar(&(yq.compact), "c", false, "jq Flag: compact instead of "+
+	f.BoolVar(&(yq.compact), "c", false, "jq Flag: compact instead of "+
 		"pretty-printed output")
-	flag.BoolVar(&(yq.nullAsSingleInputValue), "n", false, "jq Flag: use `null` "+
-		"as the single input value")
-	flag.BoolVar(&(yq.exitStatusCodeBasedOnOutput), "e", false, "jq Flag: set the "+
+	f.BoolVar(&(yq.exitStatusCodeBasedOnOutput), "e", false, "jq Flag: set the "+
 		"exit status code based on the output")
-	flag.BoolVar(&(yq.slurp), "s", false, "jq Flag: read (slurp) all inputs into "+
-		"an array; apply filter to it")
-	flag.BoolVar(&(yq.raw), "r", false, "jq Flag: output raw strings, not JSON "+
+	f.BoolVar(&(yq.nullAsSingleInputValue), "n", false, "jq Flag: use `null` "+
+		"as the single input value")
+	f.BoolVar(&(yq.raw), "r", false, "jq Flag: output raw strings, not JSON "+
 		"texts")
-	flag.BoolVar(&(yq.rawString), "R", false, "jq Flag: read raw strings, not "+
+	f.BoolVar(&(yq.slurp), "s", false, "jq Flag: read (slurp) all inputs into "+
+		"an array; apply filter to it")
+	f.BoolVar(&(yq.rawString), "R", false, "jq Flag: read raw strings, not "+
 		"JSON texts")
-	flag.BoolVar(&(yq.color), "C", false, "jq Flag: colorize JSON")
-	flag.BoolVar(&(yq.monochrome), "M", false, "jq Flag: monochrome (don't "+
+	f.BoolVar(&(yq.color), "C", false, "jq Flag: colorize JSON")
+	f.BoolVar(&(yq.monochrome), "M", false, "jq Flag: monochrome (don't "+
 		"colorize JSON)")
-	flag.BoolVar(&(yq.sort), "S", false, "jq Flag: sort keys of objects on "+
+	f.BoolVar(&(yq.sort), "S", false, "jq Flag: sort keys of objects on "+
 		"output")
-	flag.BoolVar(&(yq.tab), "tab", false, "jq Flag: use tabs for indentation")
-	flag.StringVar(&(yq.arg), "arg", "", "jq Flag: 'a v' set variable $a to value "+
+	f.BoolVar(&(yq.tab), "tab", false, "jq Flag: use tabs for indentation")
+	f.StringVar(&(yq.arg), "arg", "", "jq Flag: 'a v' set variable $a to value "+
 		"<v>")
-	flag.StringVar(&(yq.argjson), "argjson", "", "jq Flag: 'a v' set variable $a "+
-		"to JSON value <v>")
-	flag.StringVar(&(yq.slurpfile), "slurpfile", "", "jq Flag: 'a f' set variable "+
+	f.StringVar(&(yq.slurpfile), "slurpfile", "", "jq Flag: 'a f' set variable "+
 		"$a to an array of JSON texts read from <f>")
-	flag.StringVar(&(yq.rawfile), "rawfile", "", "set variable $a to a string "+
+	f.StringVar(&(yq.rawfile), "rawfile", "", "set variable $a to a string "+
 		"consisting of the contents of <f>")
-	flag.StringVar(&(yq.args), "args", "", "remaining arguments are string "+
-		"arguments, not files")
-	flag.StringVar(&(yq.jsonargs), "jsonargs", "", "remaining arguments are JSON "+
-		"arguments, not files")
 
-	if len(os.Args) == 1 {
-		flag.Usage()
+	if len(osArgs) == 1 {
+		f.Usage()
 		return errors.New("no arguments passed")
 	}
 
-	flag.Parse()
-	return nil
+	err := f.Parse(osArgs[1:])
+	return err
 }
 
-func (yq *yq) compileJqCmd() error {
+func (yq *yq) appendArgs(argName string, osArgs []string) {
+	yq.jqCmd.Args = append(yq.jqCmd.Args, argName)
+	idx := 0
+	for i, arg := range osArgs {
+		if arg == argName {
+			idx = i
+			break
+		}
+	}
+
+	yq.jqCmd.Args = append(yq.jqCmd.Args, osArgs[idx+1:idx+3]...)
+}
+
+func (yq *yq) compileJqCmd(osArgs []string, stderr io.Writer) error {
+	var f flag.FlagSet
+
+	f.SetOutput(stderr)
+	f.Usage = func() {
+		fmt.Fprintf(stderr, "Usage of %s:\n", osArgs[0])
+		f.PrintDefaults()
+	}
+
+	if err := yq.parseFlags(&f, osArgs); err != nil {
+		return errors.New("")
+	}
+
+	flagArgs := f.Args()
+
 	skippedArgs := 1
 	yq.jqCmd.Args = append(yq.jqCmd.Args, yq.jqCmd.Path)
 	if yq.compact {
@@ -143,11 +161,11 @@ func (yq *yq) compileJqCmd() error {
 	if yq.exitStatusCodeBasedOnOutput {
 		yq.jqCmd.Args = append(yq.jqCmd.Args, "-e")
 	}
-	if yq.slurp {
-		yq.jqCmd.Args = append(yq.jqCmd.Args, "-s")
-	}
 	if yq.raw {
 		yq.jqCmd.Args = append(yq.jqCmd.Args, "-r")
+	}
+	if yq.slurp {
+		yq.jqCmd.Args = append(yq.jqCmd.Args, "-s")
 	}
 	if yq.rawString {
 		yq.jqCmd.Args = append(yq.jqCmd.Args, "-R")
@@ -166,74 +184,20 @@ func (yq *yq) compileJqCmd() error {
 	}
 	if yq.arg != "" {
 		skippedArgs = skippedArgs + 1
-		yq.jqCmd.Args = append(yq.jqCmd.Args, "--arg")
-		idx := 0
-		for i, arg := range os.Args {
-			if arg == "--arg" {
-				idx = i
-				break
-			}
-		}
-
-		yq.jqCmd.Args = append(yq.jqCmd.Args, os.Args[idx+1:idx+3]...)
-	}
-	if yq.argjson != "" {
-		yq.jqCmd.Args = append(yq.jqCmd.Args, "--argjson")
-		skippedArgs = skippedArgs + 1
-		idx := 0
-		for i, arg := range os.Args {
-			if arg == "--argjson" {
-				idx = i
-				break
-			}
-		}
-
-		yq.jqCmd.Args = append(yq.jqCmd.Args, os.Args[idx+1:idx+3]...)
+		yq.appendArgs("--arg", osArgs)
 	}
 	if yq.slurpfile != "" {
-		yq.jqCmd.Args = append(yq.jqCmd.Args, "--slurpfile")
 		skippedArgs = skippedArgs + 1
-		idx := 0
-		for i, arg := range os.Args {
-			if arg == "--slurpfile" {
-				idx = i
-				break
-			}
-		}
-
-		yq.jqCmd.Args = append(yq.jqCmd.Args, os.Args[idx+1:idx+3]...)
+		yq.appendArgs("--slurpfile", osArgs)
 	}
 	if yq.rawfile != "" {
-		yq.jqCmd.Args = append(yq.jqCmd.Args, "--rawfile")
 		skippedArgs = skippedArgs + 1
-		idx := 0
-		for i, arg := range os.Args {
-			if arg == "--rawfile" {
-				idx = i
-				break
-			}
-		}
-
-		yq.jqCmd.Args = append(yq.jqCmd.Args, os.Args[idx+1:idx+3]...)
-	}
-	if yq.jsonargs != "" {
-		yq.jqCmd.Args = append(yq.jqCmd.Args, "--jsonargs")
-		idx := 0
-		for i, arg := range os.Args {
-			if arg == "--argjson" {
-				idx = i
-				break
-			}
-		}
-
-		skippedArgs = len(os.Args) - 1
-
-		yq.jqCmd.Args = append(yq.jqCmd.Args, os.Args[idx+1:]...)
+		yq.appendArgs("--rawfile", osArgs)
 	}
 
-	yq.jqCmd.Args = append(yq.jqCmd.Args, flag.Args()[skippedArgs-1])
+	yq.jqCmd.Args = append(yq.jqCmd.Args, flagArgs[skippedArgs-1])
 
-	for _, arg := range flag.Args()[skippedArgs:] {
+	for _, arg := range flagArgs[skippedArgs:] {
 		if _, err := os.Stat(arg); err != nil {
 			return err
 		}
@@ -313,12 +277,7 @@ func main() {
 		y.jqCmd.Path = path
 	}
 
-	if err := y.parseFlags(); err != nil {
-		fmt.Fprint(os.Stderr, err)
-		os.Exit(1)
-	}
-
-	if err := y.compileJqCmd(); err != nil {
+	if err := y.compileJqCmd(os.Args, os.Stderr); err != nil {
 		fmt.Fprint(os.Stderr, err)
 		os.Exit(1)
 	}
